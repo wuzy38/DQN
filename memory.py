@@ -1,3 +1,8 @@
+"""
+Adapted from OpenAI baselines
+https://github.com/openai/baselines/blob/master/baselines/deepq/replay_buffer.py
+"""
+
 import random
 
 class ReplayMemory():

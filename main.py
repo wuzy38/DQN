@@ -2,7 +2,7 @@ import gym
 import numpy as np
 import random, json, sys, time
 from itertools import count
-from wrappers import make_env
+from wrappers import wrapEnv
 from network import QNetwork
 from memory import ReplayMemory
 
@@ -10,13 +10,15 @@ from memory import ReplayMemory
 
 class DQNAgent():
     def __init__(self, game_name = "pong"):
-        self.EPS = 1
-        self.EPS_MIN = 0.01
-        self.EPS_DECAY = 0.995
+        self.LEARNING_RATE = 1e-4
+        self.eps_init = 1
+        self.eps_final = 0.02
+        self.schedule_timesteps = 5e4        # tot_timestep * explo_frac
+        self.eps = self.eps_init
         self.GAMMA = 0.95
         self.BATCH_SIZE = 32
         self.TARGET_UPDATE_C = 1000
-        self.MEMORY_CAPACITY_N = 1000
+        self.MEMORY_CAPACITY_N = 200
         self.episode_M = 5000
         self.GAME_ENV = {
             "pong" : "PongNoFrameskip-v4",
@@ -24,19 +26,19 @@ class DQNAgent():
         }
         self.game_name = game_name
         env_name = self.GAME_ENV[self.game_name]
-        self.env = make_env(gym.make(env_name))
+        self.env = wrapEnv(gym.make(env_name))
         self.reward_list = []
-        self.Qnetwork = QNetwork(self.env.action_space.n)
+        self.Qnetwork = QNetwork(self.env.action_space.n, self.LEARNING_RATE)
         self.Qnetwork.summary()
 
-    def selectAction(self, eval_Qnetwork, state):
+    def selectAction(self, eval_Qnetwork, state, is_train=True):
         """ 使用epsilon-greedy策略选择动作 
             使用神经网络近似值函数
         """
-        if random.random() <= self.EPS :
+        if random.random() <= self.eps and is_train :
             action = self.env.action_space.sample()
         else :
-            action = np.argmax(eval_Qnetwork.predict([np.ones((1, self.env.action_space.n)), np.expand_dims(state, 0)]))    # (1, 84, 84, 4) 增加一个维度 - batch_size
+            action = np.argmax(eval_Qnetwork.predict([np.ones((1, self.env.action_space.n)), np.expand_dims(np.array(state), 0)]))    # (1, 84, 84, 4) 增加一个维度 - batch_size
         return action
 
     def updateQNetwork(self, eval_Qnetwork, target_Qnetwork, sample_batch, double=True):
@@ -48,15 +50,15 @@ class DQNAgent():
         # dones = np.array([a[4] for a in sample_batch])
         states, actions, rewards, next_states, dones = [], [], [], [], []
         for i in range(len(sample_batch)):
-            states.append(sample_batch[i][0])
+            states.append(np.array(sample_batch[i][0], copy=False))
             actions.append(sample_batch[i][1])
             rewards.append(sample_batch[i][2])
-            next_states.append(sample_batch[i][3])
+            next_states.append(np.array(sample_batch[i][3], copy=False))
             dones.append(sample_batch[i][4])
-        states = np.array(states, copy=False)
+        states = np.array(states)
         actions = np.array(actions)
         rewards = np.array(rewards)
-        next_states = np.array(next_states, copy=False)
+        next_states = np.array(next_states)
         dones = np.array(dones)
         ones_mat = np.ones((len(sample_batch), self.env.action_space.n))
         if double == True :
@@ -77,33 +79,34 @@ class DQNAgent():
     def dqnTrain(self, double=True):
         step = 0
         memory = ReplayMemory(self.MEMORY_CAPACITY_N)
-        eval_Qnetwork = QNetwork(self.env.action_space.n)
-        target_Qnetwork = QNetwork(self.env.action_space.n)
+        eval_Qnetwork = QNetwork(self.env.action_space.n, self.LEARNING_RATE)
+        target_Qnetwork = QNetwork(self.env.action_space.n, self.LEARNING_RATE)
         eval_Qnetwork.set_weights(self.Qnetwork.get_weights())
         target_Qnetwork.set_weights(eval_Qnetwork.get_weights())
         reward_list = self.reward_list
         time_start = time.time()
         for episode in range(1, self.episode_M+1):
             episode_reward = 0
-            obs = self.env.reset()
-            state = np.array(obs)
-            for t in count():
+            state = self.env.reset()
+            while True:
                 step += 1
                 action = self.selectAction(eval_Qnetwork, state)
-                obs, reward, done, _ = self.env.step(action)
+                next_state, reward, done, _ = self.env.step(action)
                 episode_reward += reward
-                next_state = np.array(obs)
                 memory.add((state, action, reward, next_state, done))
                 state = next_state
                 if len(memory) > self.BATCH_SIZE:
                     sample_batch = memory.sample(self.BATCH_SIZE)
                     self.updateQNetwork(eval_Qnetwork, target_Qnetwork, sample_batch, double)
-                    self.EPS = self.EPS*self.EPS_DECAY if self.EPS > self.EPS_MIN else self.EPS_MIN
+                    # self.EPS = self.EPS*self.EPS_DECAY if self.EPS > self.EPS_MIN else self.EPS_MIN
+                    eps_fraction = min(float(step)/self.schedule_timesteps, self.eps_init)
+                    self.eps = self.eps_init + eps_fraction * (self.eps_final-self.eps_init)
                 if step % self.TARGET_UPDATE_C == 0:
                     target_Qnetwork.set_weights(eval_Qnetwork.get_weights())
                 if done :
                     break
             reward_list.append(episode_reward)
+            print("episode: {}, reward: {}, tot_step: {}, {}min. eps: {}".format(episode, episode_reward, step, (time.time()-time_start)/60, self.EPS))
             if episode % 5 == 0:
                 print("episode {}. recent 5 episode_reward:{}. using {} min. total step: {}. ".format(episode, self.reward_list[-5:], (time.time()-time_start)/60, step))
             if episode % 100 == 0:
@@ -134,13 +137,11 @@ class DQNAgent():
         if Qnetwork == None :
             Qnetwork=self.Qnetwork
         for episode in range(1, episode_num+1):
-            obs = self.env.reset()
-            state = np.array(obs)
+            state = self.env.reset()
             while True:
                 self.env.render()
-                action = np.argmax(eval_Qnetwork(np.expand_dims(state, 0)))
-                obs, reward, done, _ = self.env.step(action)
-                state = np.array(obs)
+                action = self.selectAction(Qnetwork, state, is_train=False)
+                state, reward, done, _ = self.env.step(action)
                 time.sleep(0.02)
                 if done :
                     break
