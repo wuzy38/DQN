@@ -106,7 +106,7 @@ class DQNAgent():
                 if done :
                     break
             reward_list.append(episode_reward)
-            print("episode: {}, reward: {}, tot_step: {}, {}min. eps: {}".format(episode, episode_reward, step, (time.time()-time_start)/60, self.EPS))
+            print("episode: {}, reward: {}, tot_step: {}, {}min. eps: {}".format(episode, episode_reward, step, (time.time()-time_start)/60, self.eps))
             if episode % 5 == 0:
                 print("episode {}. recent 5 episode_reward:{}. using {} min. total step: {}. ".format(episode, self.reward_list[-5:], (time.time()-time_start)/60, step))
             if episode % 50 == 0:
